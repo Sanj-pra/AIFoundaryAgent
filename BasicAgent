@@ -1,0 +1,261 @@
+"""
+Azure AI Foundry Agent - Simple Sales Analysis Bot
+A beginner-friendly example using the Foundry Agent Service
+"""
+
+import os
+from dotenv import load_dotenv
+from azure.ai.projects import AIProjectClient
+from azure.identity import DefaultAzureCredential
+from azure.ai.projects.models import (
+    CodeInterpreterTool,
+    FilePurpose,
+)
+
+# Load environment variables
+load_dotenv()
+
+
+class SimpleFoundryAgent:
+    """
+    A simple agent that can analyze data files using code interpreter
+    """
+    
+    def __init__(self):
+        # Get your project endpoint from .env file
+        endpoint = os.getenv("PROJECT_ENDPOINT")
+        
+        if not endpoint:
+            raise ValueError(
+                "PROJECT_ENDPOINT not found! "
+                "Get it from Azure AI Foundry portal: Project → Overview → Endpoint"
+            )
+        
+        # Create client (uses Azure authentication)
+        self.client = AIProjectClient.from_connection_string(
+            credential=DefaultAzureCredential(),
+            conn_str=endpoint
+        )
+        
+        self.agent = None
+        self.thread = None
+        
+        print("✓ Connected to Azure AI Foundry")
+    
+    def create_agent(self):
+        """Create an agent with code interpreter tool"""
+        
+        print("\n🤖 Creating data analysis agent...")
+        
+        # Create agent with code interpreter capability
+        self.agent = self.client.agents.create_agent(
+            model=os.getenv("MODEL_DEPLOYMENT_NAME", "gpt-4o-mini"),
+            name="DataAnalysisBot",
+            instructions="""You are an expert data analyst assistant.
+            
+Your capabilities:
+- Analyze CSV and Excel files
+- Create visualizations (charts, graphs)
+- Calculate statistics and trends
+- Identify patterns and anomalies
+- Provide clear, actionable insights
+
+When analyzing data:
+1. First, understand the data structure
+2. Look for key metrics and trends
+3. Create relevant visualizations
+4. Summarize findings clearly
+5. Suggest next steps or further analysis
+
+Always explain your reasoning and show your work.""",
+            tools=[CodeInterpreterTool()],  # Enables Python code execution
+        )
+        
+        print(f"✓ Agent created: {self.agent.name}")
+        print(f"  ID: {self.agent.id}")
+        print(f"  Model: {self.agent.model}")
+    
+    def upload_file(self, file_path):
+        """Upload a file for the agent to analyze"""
+        
+        print(f"\n📁 Uploading file: {file_path}")
+        
+        with open(file_path, "rb") as f:
+            file = self.client.agents.upload_file_and_poll(
+                file=f,
+                purpose=FilePurpose.AGENTS
+            )
+        
+        print(f"✓ File uploaded: {file.id}")
+        return file.id
+    
+    def create_thread(self, file_ids=None):
+        """Create a conversation thread"""
+        
+        print("\n💬 Creating conversation thread...")
+        
+        if file_ids:
+            # Create thread with file attachments
+            self.thread = self.client.agents.create_thread()
+            # Attach files to thread
+            for file_id in file_ids:
+                self.client.agents.create_message(
+                    thread_id=self.thread.id,
+                    role="user",
+                    content=f"I've uploaded a file (ID: {file_id}) for analysis.",
+                    file_ids=[file_id]
+                )
+        else:
+            self.thread = self.client.agents.create_thread()
+        
+        print(f"✓ Thread created: {self.thread.id}")
+    
+    def ask(self, question):
+        """Ask the agent a question"""
+        
+        print(f"\n💭 You: {question}")
+        
+        # Add message to thread
+        self.client.agents.create_message(
+            thread_id=self.thread.id,
+            role="user",
+            content=question
+        )
+        
+        # Run the agent
+        print("🔄 Agent is thinking...")
+        run = self.client.agents.create_and_process_run(
+            thread_id=self.thread.id,
+            agent_id=self.agent.id
+        )
+        
+        # Check if run completed successfully
+        if run.status == "completed":
+            # Get messages
+            messages = self.client.agents.list_messages(self.thread.id)
+            
+            # Get the latest agent response
+            for message in messages:
+                if message.role == "assistant":
+                    response = message.content[0].text.value
+                    print(f"\n🤖 Agent: {response}")
+                    return response
+                    break
+        else:
+            print(f"⚠️  Run status: {run.status}")
+            return None
+    
+    def cleanup(self):
+        """Clean up resources"""
+        
+        print("\n🧹 Cleaning up...")
+        
+        if self.agent:
+            self.client.agents.delete_agent(self.agent.id)
+            print("✓ Agent deleted")
+        
+        if self.thread:
+            self.client.agents.delete_thread(self.thread.id)
+            print("✓ Thread deleted")
+
+
+# ========== EXAMPLE USAGE ==========
+
+def example_with_file():
+    """
+    Example: Analyze a data file
+    """
+    
+    print("="*60)
+    print("EXAMPLE: Data Analysis with File Upload")
+    print("="*60)
+    
+    # Create agent
+    agent = SimpleFoundryAgent()
+    agent.create_agent()
+    
+    # Upload a data file
+    # Replace 'sales_data.csv' with your actual file
+    file_id = agent.upload_file('sample_sales_data.csv')
+    
+    # Create thread with the file
+    agent.create_thread(file_ids=[file_id])
+    
+    # Ask questions about the data
+    agent.ask("What are the main trends in this sales data?")
+    agent.ask("Which region has the highest sales?")
+    agent.ask("Create a visualization showing sales by product.")
+    
+    # Cleanup
+    agent.cleanup()
+
+
+def example_without_file():
+    """
+    Example: General conversation without files
+    """
+    
+    print("="*60)
+    print("EXAMPLE: General Data Analysis Help")
+    print("="*60)
+    
+    # Create agent
+    agent = SimpleFoundryAgent()
+    agent.create_agent()
+    
+    # Create thread
+    agent.create_thread()
+    
+    # Have a conversation
+    agent.ask("What types of data analysis can you help me with?")
+    agent.ask("How do I identify outliers in a dataset?")
+    
+    # Cleanup
+    agent.cleanup()
+
+
+def interactive_mode():
+    """
+    Interactive conversation with the agent
+    """
+    
+    print("="*60)
+    print("INTERACTIVE MODE")
+    print("="*60)
+    
+    agent = SimpleFoundryAgent()
+    agent.create_agent()
+    agent.create_thread()
+    
+    print("\n💡 Type your questions (or 'quit' to exit)")
+    print("   Example: 'How do I calculate average sales?'\n")
+    
+    while True:
+        question = input("You: ").strip()
+        
+        if question.lower() in ['quit', 'exit', 'q']:
+            break
+        
+        if question:
+            agent.ask(question)
+    
+    agent.cleanup()
+
+
+# ========== MAIN ==========
+
+if __name__ == "__main__":
+    print("""
+    AI Foundary Flight Booking Agent
+    """)
+    
+    choice = input("Enter choice (1/2/3): ").strip()
+    
+    if choice == "1":
+        example_with_file()
+    elif choice == "2":
+        example_without_file()
+    elif choice == "3":
+        interactive_mode()
+    else:
+        print("Invalid choice!")
